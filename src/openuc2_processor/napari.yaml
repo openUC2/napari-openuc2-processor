@@ -1,0 +1,27 @@
+name: openuc2-processor
+display_name: openUC2 Processor
+
+contributions:
+  commands:
+    - id: openuc2-processor.get_reader
+      title: Open source with openUC2 Processor
+      python_name: openuc2_processor._reader:napari_get_reader
+    - id: openuc2-processor.make_downloader
+      title: Dataset Downloader
+      python_name: openuc2_processor.widgets.downloader:DownloaderWidget
+    - id: openuc2-processor.make_processor
+      title: Dataset Processor
+      python_name: openuc2_processor.widgets.processor:ProcessorWidget
+
+  readers:
+    # Broad patterns are fine: get_reader returns None for sources we don't
+    # handle, and the CLI use is always `napari --plugin openuc2-processor <src>`.
+    - command: openuc2-processor.get_reader
+      accepts_directories: true
+      filename_patterns: ["*"]
+
+  widgets:
+    - command: openuc2-processor.make_downloader
+      display_name: Dataset Downloader
+    - command: openuc2-processor.make_processor
+      display_name: Dataset Processor

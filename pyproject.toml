@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# npe2 requires this distribution name to equal the manifest `name:` field,
+# which is also the `napari --plugin <name>` plugin name. Keep all three as
+# "openuc2-processor".
+name = "openuc2-processor"
+version = "0.1.0"
+description = "Download and process openUC2 / ImSwitch microscopy datasets in napari"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "openUC2" }]
+keywords = ["napari", "openUC2", "ImSwitch", "microscopy", "stitching"]
+classifiers = [
+    "Framework :: napari",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+dependencies = [
+    "napari>=0.4.18",
+    "qtpy",
+    "numpy",
+    "tifffile",
+    "requests",
+]
+
+[project.optional-dependencies]
+# ashlar sub-pixel stitching mode (engine imports it lazily)
+ashlar = ["ashlarUC2"]
+# OME-Zarr layer loading
+zarr = ["zarr", "napari-ome-zarr"]
+testing = ["pytest", "npe2"]
+
+[project.entry-points."napari.manifest"]
+# entry-point name == distribution name == manifest name == `--plugin` name.
+openuc2-processor = "openuc2_processor:napari.yaml"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+openuc2_processor = ["napari.yaml"]
