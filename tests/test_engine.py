@@ -67,3 +67,22 @@ def test_registry_has_all_modes():
         "tile-config", "timelapse", "timelapse-mip", "ashlar",
     }
     assert expected.issubset(set(PROCESSORS))
+
+
+def test_frame_transform_flip_and_rotate():
+    import numpy as np
+
+    arr = np.arange(6, dtype=np.uint16).reshape(2, 3)  # non-square
+    try:
+        engine.set_frame_transform(rotate=90)
+        assert engine.frame_transform_active()
+        assert engine._apply_frame_transform(arr).shape == (3, 2)  # dims swapped
+
+        engine.set_frame_transform(flip_x=True)
+        assert np.array_equal(engine._apply_frame_transform(arr), arr[:, ::-1])
+    finally:
+        engine.reset_frame_transform()
+
+    assert not engine.frame_transform_active()
+    # inactive transform is a no-op (returns the same array)
+    assert engine._apply_frame_transform(arr) is arr

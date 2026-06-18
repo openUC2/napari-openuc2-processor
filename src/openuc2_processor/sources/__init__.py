@@ -31,11 +31,29 @@ __all__ = [
 
 _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 _ID_RE = re.compile(r"^(\d+)(?:\.[\w.]+)?$")  # 13457227 or 13457227.zarr
+_EMBEDDED_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+
+
+def _clean_source(source: str) -> str:
+    """Tolerate common copy/paste mistakes.
+
+    Strips surrounding quotes and, if a whole command line was pasted
+    (e.g. ``napari --plugin openuc2-processor "http://host/..."``), extracts the
+    embedded URL so the user doesn't get a confusing DNS error.
+    """
+    s = (source or "").strip()
+    if len(s) >= 2 and s[0] in "\"'" and s[-1] == s[0]:
+        s = s[1:-1].strip()
+    if not _URL_RE.match(s):
+        m = _EMBEDDED_URL_RE.search(s)
+        if m:
+            return m.group(0).strip().strip('"').strip("'")
+    return s
 
 
 def resolve_source(source: str, settings=None) -> Source:
     """Resolve a raw source string into a concrete :class:`Source`."""
-    s = (source or "").strip().strip('"').strip("'")
+    s = _clean_source(source)
     if not s:
         raise ValueError("Empty source.")
 
@@ -53,7 +71,9 @@ def resolve_source(source: str, settings=None) -> Source:
         return ZenodoSource(m.group(1), base_url=base)
 
     # Scheme-less host/path (e.g. "example.org/data/x.zip") -> assume https.
-    if "/" in s and "." in s:
+    # Reject anything with whitespace so a malformed paste fails clearly instead
+    # of becoming a bogus hostname.
+    if "/" in s and "." in s and not re.search(r"\s", s):
         return HttpUrlSource("https://" + s)
 
     raise ValueError(

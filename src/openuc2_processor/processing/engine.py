@@ -30,6 +30,46 @@ except ImportError:  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
+# Per-frame preprocessing (flip / rotate), applied to every tile read.
+# Mainly used to correct tile orientation before stitching / ashlar.
+# ---------------------------------------------------------------------------
+
+_FLIP_X = False   # mirror left-right (flip the X / column axis)
+_FLIP_Y = False   # mirror up-down (flip the Y / row axis)
+_ROT90 = 0        # number of counter-clockwise 90-degree rotations (0..3)
+
+
+def set_frame_transform(flip_x: bool = False, flip_y: bool = False, rotate: int = 0) -> None:
+    """Configure the global per-frame transform. ``rotate`` is degrees CCW."""
+    global _FLIP_X, _FLIP_Y, _ROT90
+    _FLIP_X = bool(flip_x)
+    _FLIP_Y = bool(flip_y)
+    _ROT90 = int(round((rotate or 0) / 90)) % 4
+
+
+def reset_frame_transform() -> None:
+    set_frame_transform(False, False, 0)
+
+
+def frame_transform_active() -> bool:
+    return _FLIP_X or _FLIP_Y or _ROT90 != 0
+
+
+def _apply_frame_transform(arr: np.ndarray) -> np.ndarray:
+    """Apply the configured flip/rotate to a single 2-D or (H, W, C) frame."""
+    if not frame_transform_active():
+        return arr
+    if _FLIP_X:
+        arr = arr[:, ::-1]
+    if _FLIP_Y:
+        arr = arr[::-1, :]
+    if _ROT90:
+        arr = np.rot90(arr, _ROT90)
+    # Materialise to avoid negative strides downstream (tifffile / ashlar).
+    return np.ascontiguousarray(arr)
+
+
+# ---------------------------------------------------------------------------
 # Filename parsing
 # ---------------------------------------------------------------------------
 
@@ -330,7 +370,7 @@ class ExperimentGrid:
 
 
 def _read_tile(info: TileInfo) -> np.ndarray:
-    return tif.imread(info.filepath)
+    return _apply_frame_transform(tif.imread(info.filepath))
 
 
 # ---------------------------------------------------------------------------
@@ -871,13 +911,13 @@ class _NumpyReader:
             if tile is None:
                 h, w = self._metadata.size
                 return np.zeros((h, w), dtype=self._metadata.pixel_dtype)
-            img = tif.imread(tile.filepath)
+            img = _apply_frame_transform(tif.imread(tile.filepath))
             return img[..., plane] if img.ndim == 3 else img
         tile = self._tiles.get((series, c))
         if tile is None:
             h, w = self._metadata.size
             return np.zeros((h, w), dtype=self._metadata.pixel_dtype)
-        img = tif.imread(tile.filepath)
+        img = _apply_frame_transform(tif.imread(tile.filepath))
         if img.ndim == 3 and img.shape[2] in (3, 4):
             img = np.dot(img[..., :3], [0.299, 0.587, 0.114]).astype(np.uint16)
         return img
@@ -922,7 +962,7 @@ def _build_numpy_reader(
                 tiles_dict[(pos_idx, c_local)] = best
 
                 if ref_size is None:
-                    img = tif.imread(best.filepath)
+                    img = _apply_frame_transform(tif.imread(best.filepath))
                     is_rgb = img.ndim == 3 and img.shape[2] in (3, 4)
                     ref_size = img.shape[:2]
                     ref_dtype = img[..., 0].dtype if is_rgb else img.dtype
@@ -956,7 +996,7 @@ def _select_best_z_tile(tiles: List[TileInfo]) -> TileInfo:
         return tiles[0]
     best_tile, best_score = tiles[0], -1.0
     for t in tiles:
-        img = tif.imread(t.filepath)
+        img = _apply_frame_transform(tif.imread(t.filepath))
         score = _focus_measure(img)
         if score > best_score:
             best_score, best_tile = score, t
@@ -1023,7 +1063,7 @@ def build_ashlar_stitched(
         out_file = os.path.join(out_dir, f"ashlar_stitched_t{tp:04d}.ome.tif")
         print(f"  Output -> {os.path.basename(out_file)}")
 
-        if build_imswitch_reader is not None:
+        if build_imswitch_reader is not None and not frame_transform_active():
             try:
                 reader = build_imswitch_reader(selected_paths, pixel_size=pixel_size)
                 filepaths_arg = [reader]
@@ -1037,7 +1077,7 @@ def build_ashlar_stitched(
                     continue
                 filepaths_arg = [reader]
         else:
-            print("  build_imswitch_reader not available - using built-in numpy reader")
+            print("  Using built-in numpy reader (ashlar reader unavailable or frame transform active)")
             reader = _build_numpy_reader(grid, tp, grid.c_indices, pixel_size)
             if reader is None:
                 print(f"  Skipping timepoint {tp}: no tiles for reader construction.")

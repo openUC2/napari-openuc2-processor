@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import os
+import re
 
 from qtpy.QtWidgets import (
     QCheckBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QProgressBar,
     QPushButton,
-    QSizePolicy,
+    QScrollArea,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -23,9 +26,12 @@ from ..sources import resolve_source
 from ..sources.base import ProgressEvent
 from ._load import open_path
 
+_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
+_ID_RE = re.compile(r"^\d+(?:\.[\w.]+)?$")
+
 
 class DownloaderWidget(QWidget):
-    """Download a dataset (local path / URL / record id) with progress + controls."""
+    """Download a dataset (URL / local path / record id) with progress + controls."""
 
     def __init__(self, napari_viewer=None, source: str = "") -> None:
         super().__init__()
@@ -34,16 +40,53 @@ class DownloaderWidget(QWidget):
         self.manager = DownloadManager()
         self._last_path = None
 
-        layout = QVBoxLayout(self)
+        # Scroll wrapper so controls stay reachable in a narrow dock.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
 
-        # -- source ---------------------------------------------------------
-        layout.addWidget(QLabel("<b>Source</b> (local path, http(s) URL, or record id)"))
-        self.source_edit = QLineEdit(source)
-        self.source_edit.setPlaceholderText("e.g. 13457227.zarr  or  http://host:8001/.../download/exp.ome.zarr")
-        layout.addWidget(self.source_edit)
+        # -- source (three tabs) -------------------------------------------
+        layout.addWidget(QLabel("<b>Source</b>"))
+        self.tabs = QTabWidget()
+
+        url_tab = QWidget()
+        url_l = QVBoxLayout(url_tab)
+        self.url_edit = QLineEdit()
+        self.url_edit.setPlaceholderText("http(s)://host/imswitch/api/FileManager/download/…")
+        url_l.addWidget(self.url_edit)
+        self.tabs.addTab(url_tab, "URL")
+
+        local_tab = QWidget()
+        local_l = QVBoxLayout(local_tab)
+        self.local_edit = QLineEdit()
+        self.local_edit.setPlaceholderText("/path/to/folder or file")
+        local_l.addWidget(self.local_edit)
+        local_btns = QHBoxLayout()
+        b_folder = QPushButton("Browse folder…")
+        b_folder.clicked.connect(self._browse_local_folder)
+        b_file = QPushButton("Browse file…")
+        b_file.clicked.connect(self._browse_local_file)
+        local_btns.addWidget(b_folder)
+        local_btns.addWidget(b_file)
+        local_l.addLayout(local_btns)
+        local_l.addWidget(QLabel("<i>Local data is used in place — not downloaded.</i>"))
+        self.tabs.addTab(local_tab, "Local path")
+
+        zen_tab = QWidget()
+        zen_l = QVBoxLayout(zen_tab)
+        self.zen_edit = QLineEdit()
+        self.zen_edit.setPlaceholderText("Zenodo record id, e.g. 13457227")
+        zen_l.addWidget(self.zen_edit)
+        self.tabs.addTab(zen_tab, "Zenodo ID")
+
+        layout.addWidget(self.tabs)
 
         # -- storage dir ----------------------------------------------------
-        layout.addWidget(QLabel("<b>Storage folder</b>"))
+        layout.addWidget(QLabel("<b>Storage folder</b> (for downloads)"))
         store_row = QHBoxLayout()
         self.storage_edit = QLineEdit(self.settings.get("storage_dir"))
         self.storage_edit.setReadOnly(True)
@@ -86,7 +129,49 @@ class DownloaderWidget(QWidget):
         layout.addWidget(self.to_processor_btn)
 
         layout.addStretch(1)
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        scroll.setWidget(inner)
+        outer.addWidget(scroll)
+
+        if source:
+            self._prefill(source)
+
+    # -- source helpers -----------------------------------------------------
+    def _prefill(self, source: str) -> None:
+        s = source.strip().strip('"').strip("'")
+        if _URL_RE.match(s):
+            self.url_edit.setText(s)
+            self.tabs.setCurrentIndex(0)
+        elif os.path.exists(s):
+            self.local_edit.setText(s)
+            self.tabs.setCurrentIndex(1)
+        elif _ID_RE.match(s):
+            self.zen_edit.setText(s)
+            self.tabs.setCurrentIndex(2)
+        else:
+            self.url_edit.setText(s)
+            self.tabs.setCurrentIndex(0)
+
+    def _current_source(self) -> str:
+        idx = self.tabs.currentIndex()
+        if idx == 0:
+            return self.url_edit.text().strip()
+        if idx == 1:
+            return self.local_edit.text().strip()
+        return self.zen_edit.text().strip()
+
+    def _browse_local_folder(self) -> None:
+        start = self.local_edit.text() or self.settings.get("storage_dir")
+        chosen = QFileDialog.getExistingDirectory(self, "Choose data folder", start)
+        if chosen:
+            self.local_edit.setText(chosen)
+            self.tabs.setCurrentIndex(1)
+
+    def _browse_local_file(self) -> None:
+        start = self.local_edit.text() or self.settings.get("storage_dir")
+        chosen, _ = QFileDialog.getOpenFileName(self, "Choose data file", start)
+        if chosen:
+            self.local_edit.setText(chosen)
+            self.tabs.setCurrentIndex(1)
 
     # -- storage dir --------------------------------------------------------
     def _on_change_dir(self) -> None:
@@ -98,7 +183,7 @@ class DownloaderWidget(QWidget):
 
     # -- download lifecycle -------------------------------------------------
     def _on_start(self) -> None:
-        raw = self.source_edit.text().strip()
+        raw = self._current_source()
         if not raw:
             self.status.setText("Please enter a source.")
             return
@@ -111,7 +196,7 @@ class DownloaderWidget(QWidget):
 
         self.settings.set("load_as_stack", self.load_check.isChecked())
         self._set_running(True)
-        self.status.setText(f"Downloading from {source.name} …")
+        self.status.setText(f"Working: {source.name} …")
         self.progress.setValue(0)
         self.manager.start(
             source, dest,

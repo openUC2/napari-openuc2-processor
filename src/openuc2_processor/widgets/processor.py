@@ -8,15 +8,18 @@ from typing import Dict, List
 from qtpy.QtCore import QObject, Signal
 from qtpy.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -43,7 +46,14 @@ class ProcessorWidget(QWidget):
         self._bridge.progress.connect(self._on_progress)
         self._mode_checks: Dict[str, QCheckBox] = {}
 
-        layout = QVBoxLayout(self)
+        # Scroll wrapper so the Run button stays reachable in a narrow dock.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
 
         # -- input / output -------------------------------------------------
         layout.addWidget(QLabel("<b>Input folder</b> (tiles dir, session dir, or parent)"))
@@ -78,6 +88,24 @@ class ProcessorWidget(QWidget):
             self._mode_checks[key] = cb
             modes_layout.addWidget(cb)
         layout.addWidget(modes_box)
+
+        # -- frame preprocessing (all modes) --------------------------------
+        prep_box = QGroupBox("Frame preprocessing (applied to every tile)")
+        prep = QFormLayout(prep_box)
+        flip_row = QHBoxLayout()
+        self.flip_x_check = QCheckBox("Flip X")
+        self.flip_y_check = QCheckBox("Flip Y")
+        flip_row.addWidget(self.flip_x_check)
+        flip_row.addWidget(self.flip_y_check)
+        flip_row.addStretch(1)
+        flip_w = QWidget()
+        flip_w.setLayout(flip_row)
+        prep.addRow("Flip", flip_w)
+        self.rotate_combo = QComboBox()
+        for deg in (0, 90, 180, 270):
+            self.rotate_combo.addItem(f"{deg}°", deg)
+        prep.addRow("Rotate (CCW)", self.rotate_combo)
+        layout.addWidget(prep_box)
 
         # -- advanced / ashlar params --------------------------------------
         self.adv_box = QGroupBox("Advanced (ashlar + discovery)")
@@ -124,6 +152,8 @@ class ProcessorWidget(QWidget):
         layout.addWidget(self.status)
 
         layout.addStretch(1)
+        scroll.setWidget(inner)
+        outer.addWidget(scroll)
         self._update_advanced_enabled()
 
     # -- pickers ------------------------------------------------------------
@@ -153,8 +183,6 @@ class ProcessorWidget(QWidget):
         any_ashlar = any(
             PROCESSORS[k].needs_ashlar_params for k in self._selected_keys()
         )
-        # discovery params (protocol) are always relevant; ashlar spins only matter
-        # for ashlar, but leave them visible for clarity.
         self.adv_box.setEnabled(True)
         self.pixel_spin.setEnabled(any_ashlar)
         self.shift_spin.setEnabled(any_ashlar)
@@ -176,6 +204,9 @@ class ProcessorWidget(QWidget):
             pixel_size=self.pixel_spin.value(),
             maximum_shift=self.shift_spin.value(),
             align_channel=self.align_spin.value(),
+            flip_x=self.flip_x_check.isChecked(),
+            flip_y=self.flip_y_check.isChecked(),
+            rotate=int(self.rotate_combo.currentData()),
         )
 
         from napari.qt.threading import thread_worker

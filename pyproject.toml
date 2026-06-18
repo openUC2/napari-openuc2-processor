@@ -25,13 +25,16 @@ dependencies = [
     "numpy",
     "tifffile",
     "requests",
+    "ashlarUC2",
 ]
 
 [project.optional-dependencies]
-# ashlar sub-pixel stitching mode (engine imports it lazily)
-ashlar = ["ashlarUC2"]
-# OME-Zarr layer loading
-zarr = ["zarr", "napari-ome-zarr"]
+# NOTE: OME-Zarr layer viewing is intentionally NOT a dependency here.
+# napari-ome-zarr -> ome-zarr -> fsspec[s3] -> s3fs, and on Python 3.13/3.14 the
+# resolver can land on the ancient s3fs 0.3.5 which fails to build
+# (configparser.SafeConfigParser was removed). If you want to view .zarr in
+# napari, install it separately in an env where it resolves, e.g.:
+#     pip install "napari-ome-zarr" "s3fs>=2024"
 testing = ["pytest", "npe2"]
 
 [project.entry-points."napari.manifest"]

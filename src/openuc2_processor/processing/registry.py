@@ -23,6 +23,10 @@ class ProcessParams:
     pixel_size: float = 1.0               # microns/pixel (ashlar)
     maximum_shift: float = 50.0           # microns (ashlar)
     align_channel: int = 0                # ashlar alignment channel
+    # Per-frame preprocessing applied to every tile (all modes).
+    flip_x: bool = False                  # mirror left-right
+    flip_y: bool = False                  # mirror up-down
+    rotate: int = 0                       # degrees CCW: 0 / 90 / 180 / 270
 
 
 @dataclass
@@ -165,18 +169,25 @@ def run_processors(
         )
     grid = ExperimentGrid.from_tiles(tiles)
 
+    # Apply the per-frame flip/rotate to every tile read for the duration of the run.
+    engine.set_frame_transform(params.flip_x, params.flip_y, params.rotate)
+
     results: Dict[str, List[str]] = {}
     total = len(selected)
-    for i, key in enumerate(selected):
-        proc = PROCESSORS[key]
-        if progress_cb is not None:
-            progress_cb(proc.label, i, total)
-        out_sub = os.path.join(out_base, proc.subdir)
-        try:
-            results[key] = proc.run(grid, out_sub, params)
-        except Exception as exc:  # one mode failing shouldn't abort the rest
-            print(f"  ERROR in processor '{key}': {exc}")
-            results[key] = []
+    try:
+        for i, key in enumerate(selected):
+            proc = PROCESSORS[key]
+            if progress_cb is not None:
+                progress_cb(proc.label, i, total)
+            out_sub = os.path.join(out_base, proc.subdir)
+            try:
+                results[key] = proc.run(grid, out_sub, params)
+            except Exception as exc:  # one mode failing shouldn't abort the rest
+                print(f"  ERROR in processor '{key}': {exc}")
+                results[key] = []
+    finally:
+        engine.reset_frame_transform()
+
     if progress_cb is not None:
         progress_cb("done", total, total)
     return results

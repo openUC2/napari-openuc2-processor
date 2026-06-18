@@ -119,3 +119,39 @@ def test_http_download_zip_extracted(http_server, tmp_path):
     assert os.path.isdir(out)
     assert out.endswith("bar")
     assert os.path.isfile(os.path.join(out, "x.txt"))
+
+
+def test_http_download_extensionless_zip(http_server, tmp_path):
+    """ImSwitch folder downloads may lose the .zip extension — detect by magic bytes."""
+    base, docroot = http_server
+    folder = docroot / "exp"
+    folder.mkdir()
+    (folder / "a.txt").write_text("hi")
+    with zipfile.ZipFile(docroot / "bundle", "w") as zf:  # no .zip extension
+        zf.write(folder / "a.txt", arcname="exp/a.txt")
+
+    src = HttpUrlSource(base + "/bundle")
+    out = run_sync(src, str(tmp_path))
+    assert os.path.isdir(out)
+    assert out.endswith("exp")
+    assert os.path.isfile(os.path.join(out, "a.txt"))
+
+
+# -- defensive parsing ------------------------------------------------------
+
+def test_clean_source_extracts_url_from_pasted_command():
+    from openuc2_processor.sources import _clean_source
+
+    assert (
+        _clean_source('napari --plugin openuc2-processor "http://h:8001/a/b"')
+        == "http://h:8001/a/b"
+    )
+    assert _clean_source('"http://h/x"') == "http://h/x"
+    assert _clean_source("/Users/bene/data") == "/Users/bene/data"
+
+
+def test_resolve_rejects_malformed_command(tmp_path):
+    # A pasted command resolves to its embedded URL, not a bogus hostname.
+    s = resolve_source('napari --plugin openuc2-processor "http://h:8001/a/b"')
+    assert isinstance(s, HttpUrlSource)
+    assert s.url == "http://h:8001/a/b"
