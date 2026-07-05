@@ -1,0 +1,69 @@
+name: Publish to PyPI
+
+# Publishes the napari plugin to PyPI so it is discoverable via the
+# `Framework :: napari` classifier (napari hub + napari's Install Plugins menu).
+#
+# Triggers on a pushed version tag (e.g. `v0.1.0`) or a published GitHub Release.
+# Uses PyPI Trusted Publishing (OIDC) — no API token needs to be stored.
+# One-time setup on PyPI: https://pypi.org/manage/account/publishing/
+#   Owner: openUC2 · Repo: napari-openuc2-processor · Workflow: publish.yml
+#   Environment: pypi
+
+on:
+  push:
+    tags:
+      - "v*"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade build twine pkginfo
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Check metadata (fails if long_description/classifiers are broken)
+        run: python -m twine check dist/*
+
+      - name: Verify the napari classifier is present
+        run: |
+          python - <<'PY'
+          import glob, pkginfo, sys
+          meta = pkginfo.Wheel(glob.glob("dist/*.whl")[0])
+          assert "Framework :: napari" in meta.classifiers, \
+              "Missing 'Framework :: napari' classifier — plugin won't be discoverable"
+          print("OK: Framework :: napari classifier present")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # required for Trusted Publishing (OIDC)
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

@@ -16,9 +16,19 @@ authors = [{ name = "openUC2" }]
 keywords = ["napari", "openUC2", "ImSwitch", "microscopy", "stitching"]
 classifiers = [
     "Framework :: napari",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Image Processing",
 ]
+
 dependencies = [
     "napari>=0.4.18",
     "qtpy",
@@ -27,6 +37,12 @@ dependencies = [
     "requests",
     "ashlarUC2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/openUC2/napari-openuc2-processor"
+"Bug Tracker" = "https://github.com/openUC2/napari-openuc2-processor/issues"
+"Source Code" = "https://github.com/openUC2/napari-openuc2-processor"
+"User Support" = "https://github.com/openUC2/napari-openuc2-processor/issues"
 
 [project.optional-dependencies]
 # NOTE: OME-Zarr layer viewing is intentionally NOT a dependency here.
