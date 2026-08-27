@@ -12,6 +12,9 @@ contributions:
     - id: openuc2-processor.make_processor
       title: Dataset Processor
       python_name: openuc2_processor.widgets.processor:ProcessorWidget
+    - id: openuc2-processor.make_readnoise
+      title: Read-noise Calibration
+      python_name: openuc2_processor.widgets.readnoise:ReadnoiseWidget
 
   readers:
     # Broad patterns are fine: get_reader returns None for sources we don't
@@ -25,3 +28,5 @@ contributions:
       display_name: Dataset Downloader
     - command: openuc2-processor.make_processor
       display_name: Dataset Processor
+    - command: openuc2-processor.make_readnoise
+      display_name: Read-noise Calibration
