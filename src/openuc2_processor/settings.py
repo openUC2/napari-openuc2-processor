@@ -26,6 +26,8 @@ DEFAULTS: Dict[str, Any] = {
     "storage_dir": default_storage_dir(),
     # Base used to resolve bare numeric IDs (e.g. "13457227" -> Zenodo record).
     "id_base_url": "https://zenodo.org",
+    # Last host:port entered in the Downloader's "Microscope" browse tab.
+    "last_microscope_url": "",
     "load_as_stack": False,
     "visualize_results": False,
 }
