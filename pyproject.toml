@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 # which is also the `napari --plugin <name>` plugin name. Keep all three as
 # "openuc2-processor".
 name = "openuc2-processor"
-version = "0.1.0"
+version = "0.1.1"
 description = "Download and process openUC2 / ImSwitch microscopy datasets in napari"
 readme = "README.md"
 requires-python = ">=3.9"
