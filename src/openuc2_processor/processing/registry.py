@@ -167,24 +167,34 @@ def run_processors(
             f"No ImSwitch tiles found under {input_dir}. Expected files named "
             "t<date>_x..._y..._z..._c..._<channel>_i..._p....tif"
         )
-    grid = ExperimentGrid.from_tiles(tiles)
+    # One grid per scan region. Grid indices are region-local, so a single grid
+    # over several regions produced one sparse mosaic instead of several correct
+    # ones. Single-region runs keep the previous flat output layout.
+    regions = engine.group_by_region(tiles)
+    multi_region = len(regions) > 1
 
     # Apply the per-frame flip/rotate to every tile read for the duration of the run.
     engine.set_frame_transform(params.flip_x, params.flip_y, params.rotate)
 
-    results: Dict[str, List[str]] = {}
-    total = len(selected)
+    results: Dict[str, List[str]] = {key: [] for key in selected}
+    total = len(selected) * len(regions)
+    step = 0
     try:
-        for i, key in enumerate(selected):
-            proc = PROCESSORS[key]
-            if progress_cb is not None:
-                progress_cb(proc.label, i, total)
-            out_sub = os.path.join(out_base, proc.subdir)
-            try:
-                results[key] = proc.run(grid, out_sub, params)
-            except Exception as exc:  # one mode failing shouldn't abort the rest
-                print(f"  ERROR in processor '{key}': {exc}")
-                results[key] = []
+        for region, region_tiles in regions.items():
+            grid = ExperimentGrid.from_tiles(region_tiles)
+            for key in selected:
+                proc = PROCESSORS[key]
+                if progress_cb is not None:
+                    label = f"{proc.label} [{region}]" if multi_region else proc.label
+                    progress_cb(label, step, total)
+                step += 1
+                out_sub = os.path.join(out_base, proc.subdir)
+                if multi_region:
+                    out_sub = os.path.join(out_sub, region or "unassigned")
+                try:
+                    results[key].extend(proc.run(grid, out_sub, params))
+                except Exception as exc:  # one mode failing shouldn't abort the rest
+                    print(f"  ERROR in processor '{key}' for region '{region}': {exc}")
     finally:
         engine.reset_frame_transform()
 

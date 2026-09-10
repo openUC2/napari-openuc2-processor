@@ -86,3 +86,76 @@ def test_frame_transform_flip_and_rotate():
     assert not engine.frame_transform_active()
     # inactive transform is a no-op (returns the same array)
     assert engine._apply_frame_transform(arr) is arr
+
+
+# ---------------------------------------------------------------------------
+# Scan regions
+# ---------------------------------------------------------------------------
+
+def _tile(iterator, region="", x=0, y=0):
+    from openuc2_processor.processing.engine import TileInfo
+    return TileInfo(filepath=f"/d/{region}_{iterator}.tif", timestamp="20260910_120000",
+                    x=x, y=y, z=0, c_idx=0, channel="LED", iterator=iterator,
+                    power=0, region=region)
+
+
+def _protocol(tmp_path, regions, n=9):
+    import json
+    data = {"snake_tiles": [
+        [{"iterator": i, "iX": i % 3, "iY": i // 3, "region_id": r} for i in range(n)]
+        for r in regions
+    ]}
+    path = tmp_path / "run_protocol.json"
+    path.write_text(json.dumps(data))
+    return str(path)
+
+
+def test_region_is_parsed_from_the_filename_and_is_optional():
+    from openuc2_processor.processing.engine import parse_filename
+    with_region = parse_filename(
+        "/d/t20260910_120000_rarea0_x1000_y2000_z0_c0_LED_i0003_p100.tif")
+    without = parse_filename(
+        "/d/t20260910_120000_x1000_y2000_z0_c0_LED_i0003_p100.tif")
+    assert with_region.region == "area0"
+    assert with_region.iterator == 3 and with_region.x == 1000
+    assert without.region == ""          # pre-region data still parses
+    assert without.iterator == 3 and without.x == 1000
+
+
+def test_each_region_gets_its_own_grid_origin(tmp_path):
+    """Iterators restart per region; one flat map made them overwrite."""
+    from openuc2_processor.processing.engine import assign_grid_indices
+    tiles = [_tile(i, region=r, x=i * 100)
+             for r in ("area0", "area1") for i in range(9)]
+    assign_grid_indices(tiles, _protocol(tmp_path, ["area_0", "area_1"]))
+
+    for region in ("area0", "area1"):
+        placed = [(t.ix, t.iy) for t in tiles if t.region == region]
+        assert sorted(placed) == [(x, y) for x in range(3) for y in range(3)]
+
+
+def test_a_missing_tile_does_not_shift_the_rest(tmp_path):
+    """Rank matching paired the Nth position with the Nth JSON entry, so one
+    dropped tile moved every position after it."""
+    from openuc2_processor.processing.engine import assign_grid_indices
+    tiles = [_tile(i, region="area0", x=i * 100) for i in range(9) if i != 4]
+    assign_grid_indices(tiles, _protocol(tmp_path, ["area_0"]))
+
+    by_iterator = {t.iterator: (t.ix, t.iy) for t in tiles}
+    assert by_iterator[5] == (2, 1)   # keeps its own place
+    assert by_iterator[8] == (2, 2)
+    assert 4 not in by_iterator
+
+
+def test_tiles_from_another_run_fall_back_instead_of_placing_them_wrongly(tmp_path, capsys):
+    from openuc2_processor.processing.engine import assign_grid_indices
+    tiles = [_tile(i, region="area0", x=i * 100) for i in range(20)]
+    assign_grid_indices(tiles, _protocol(tmp_path, ["area_0"], n=9))
+    assert "not present in the protocol" in capsys.readouterr().out
+    assert all(t.ix >= 0 and t.iy >= 0 for t in tiles)
+
+
+def test_group_by_region_keeps_first_seen_order():
+    from openuc2_processor.processing.engine import group_by_region
+    tiles = [_tile(0, "b"), _tile(1, "a"), _tile(2, "b")]
+    assert list(group_by_region(tiles)) == ["b", "a"]

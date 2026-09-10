@@ -75,6 +75,9 @@ def _apply_frame_transform(arr: np.ndarray) -> np.ndarray:
 
 _FILENAME_RE = re.compile(
     r"t(?P<timestamp>\d{8}_\d{6})"
+    # Scan region, written by ImSwitch's OME writer. Optional: files from
+    # before it existed have no region and fall back to the directory name.
+    r"(?:_r(?P<region>[A-Za-z0-9]+))?"
     r"_x(?P<x>-?\d+)"
     r"_y(?P<y>-?\d+)"
     r"_z(?P<z>-?\d+)"
@@ -101,6 +104,10 @@ class TileInfo:
     timepoint: int = 0
     ix: int = -1
     iy: int = -1
+    # Scan region this tile belongs to. Grid indices are only meaningful within
+    # one region: two regions each have their own iX/iY origin, so mixing them
+    # collapses several mosaics into one sparse grid.
+    region: str = ""
 
 
 def parse_filename(filepath: str) -> Optional[TileInfo]:
@@ -117,6 +124,7 @@ def parse_filename(filepath: str) -> Optional[TileInfo]:
         z=int(m.group("z")),
         c_idx=int(m.group("c_idx")),
         channel=m.group("channel"),
+        region=m.group("region") or "",
         iterator=int(m.group("iter")),
         power=int(m.group("power")),
     )
@@ -141,20 +149,37 @@ def _find_protocol_json(tiles_dir: str) -> Optional[str]:
     return None
 
 
-def load_protocol_grid(json_path: str) -> Dict[int, Tuple[int, int]]:
-    """Map iterator -> (iX, iY) from the snake_tiles list in the protocol JSON."""
+def normalize_region(region_id: Optional[str]) -> str:
+    """Region id reduced to the alphanumerics a TIFF filename can carry.
+
+    ImSwitch writes `_r<alnum>` into the filename while the protocol JSON keeps
+    the full id (`area_0`), so both sides are normalised before comparison.
+    """
+    return "".join(c for c in (region_id or "") if c.isalnum())
+
+
+def load_protocol_grid(json_path: str) -> Dict[str, Dict[int, Tuple[int, int]]]:
+    """Map region -> {iterator: (iX, iY)} from the protocol JSON.
+
+    Per region, because `iterator` restarts at 0 in every region: a single flat
+    map silently let one region's positions overwrite another's.
+    The "" key holds every entry merged, for protocols predating region ids.
+    """
     with open(json_path) as f:
         data = json.load(f)
 
-    iterator_to_grid: Dict[int, Tuple[int, int]] = {}
+    by_region: Dict[str, Dict[int, Tuple[int, int]]] = {"": {}}
     for row in data.get("snake_tiles", []):
         for entry in row:
             it = entry.get("iterator")
             ix = entry.get("iX")
             iy = entry.get("iY")
-            if it is not None and ix is not None and iy is not None:
-                iterator_to_grid[it] = (int(ix), int(iy))
-    return iterator_to_grid
+            if it is None or ix is None or iy is None:
+                continue
+            region = normalize_region(entry.get("region_id") or entry.get("centerIndex"))
+            by_region.setdefault(region, {})[int(it)] = (int(ix), int(iy))
+            by_region[""].setdefault(int(it), (int(ix), int(iy)))
+    return by_region
 
 
 def _cluster_to_indices(values: List[int]) -> Dict[int, int]:
@@ -163,55 +188,77 @@ def _cluster_to_indices(values: List[int]) -> Dict[int, int]:
     return {v: i for i, v in enumerate(unique)}
 
 
+def group_by_region(tiles: List[TileInfo]) -> Dict[str, List[TileInfo]]:
+    """Split tiles per scan region, preserving first-seen order."""
+    groups: Dict[str, List[TileInfo]] = {}
+    for tile in tiles:
+        groups.setdefault(tile.region, []).append(tile)
+    return groups
+
+
+def _assign_from_coordinates(tiles: List[TileInfo]) -> None:
+    x_map = _cluster_to_indices([t.x for t in tiles])
+    y_map = _cluster_to_indices([t.y for t in tiles])
+    for tile in tiles:
+        tile.ix = x_map[tile.x]
+        tile.iy = y_map[tile.y]
+
+
+def _assign_region_grid(tiles: List[TileInfo],
+                        iter_map: Dict[int, Tuple[int, int]],
+                        label: str) -> None:
+    """Place one region's tiles using the protocol's own iterator numbers.
+
+    Matching is by iterator, not by sorted rank: rank matching paired the
+    Nth unique XY position with the Nth JSON entry, so a single dropped tile
+    shifted every position after it and quietly produced a wrong mosaic.
+    """
+    missing = sorted({t.iterator for t in tiles} - set(iter_map))
+    if missing:
+        raise ValueError(
+            f"region {label or '<none>'}: {len(missing)} tile(s) have iterators "
+            f"not present in the protocol JSON (first: {missing[:5]}). The tiles "
+            "and the protocol do not describe the same run."
+        )
+
+    for tile in tiles:
+        tile.ix, tile.iy = iter_map[tile.iterator]
+
+    min_ix = min(t.ix for t in tiles)
+    min_iy = min(t.iy for t in tiles)
+    for tile in tiles:
+        tile.ix -= min_ix
+        tile.iy -= min_iy
+
+
 def assign_grid_indices(tiles: List[TileInfo], protocol_json: Optional[str]) -> None:
-    """Assign ix/iy grid indices to every TileInfo in-place."""
-    if protocol_json and os.path.isfile(protocol_json):
-        print(f"  Using protocol JSON: {os.path.basename(protocol_json)}")
-        iter_map = load_protocol_grid(protocol_json)
+    """Assign ix/iy grid indices to every TileInfo in-place, per region.
 
-        xy_groups: Dict[Tuple[int, int], List[TileInfo]] = {}
-        for tile in tiles:
-            key = (tile.x, tile.y)
-            xy_groups.setdefault(key, []).append(tile)
+    Grid indices are region-local: each region has its own iX/iY origin, so
+    indices are assigned within a region and never across regions.
+    """
+    regions = group_by_region(tiles)
 
-        ranked_xy = sorted(xy_groups.keys(),
-                           key=lambda k: min(t.iterator for t in xy_groups[k]))
-        ranked_json = sorted(iter_map.keys())
-
-        if len(ranked_xy) != len(ranked_json):
-            print(f"  WARNING: {len(ranked_xy)} unique XY positions but "
-                  f"{len(ranked_json)} JSON entries - using coordinate fallback")
-            x_map = _cluster_to_indices([t.x for t in tiles])
-            y_map = _cluster_to_indices([t.y for t in tiles])
-            for tile in tiles:
-                tile.ix = x_map[tile.x]
-                tile.iy = y_map[tile.y]
-            return
-
-        xy_to_grid: Dict[Tuple[int, int], Tuple[int, int]] = {}
-        for xy_key, json_iter in zip(ranked_xy, ranked_json):
-            xy_to_grid[xy_key] = iter_map[json_iter]
-
-        for tile in tiles:
-            ix, iy = xy_to_grid[(tile.x, tile.y)]
-            tile.ix = ix
-            tile.iy = iy
-
-        min_ix = min(t.ix for t in tiles)
-        min_iy = min(t.iy for t in tiles)
-        for tile in tiles:
-            tile.ix -= min_ix
-            tile.iy -= min_iy
-
-        print(f"  Grid indices assigned from JSON for {len(tiles)}/{len(tiles)} tiles "
-              f"({len(ranked_xy)} unique XY positions)")
-    else:
+    if not (protocol_json and os.path.isfile(protocol_json)):
         print("  No protocol JSON found - deriving grid indices from stage coordinates")
-        x_map = _cluster_to_indices([t.x for t in tiles])
-        y_map = _cluster_to_indices([t.y for t in tiles])
-        for tile in tiles:
-            tile.ix = x_map[tile.x]
-            tile.iy = y_map[tile.y]
+        for region_tiles in regions.values():
+            _assign_from_coordinates(region_tiles)
+        return
+
+    print(f"  Using protocol JSON: {os.path.basename(protocol_json)}")
+    grids_by_region = load_protocol_grid(protocol_json)
+    for label, region_tiles in regions.items():
+        # Fall back to the merged map for single-region runs and for data
+        # written before region ids reached the filename.
+        iter_map = grids_by_region.get(label) or grids_by_region.get("", {})
+        try:
+            _assign_region_grid(region_tiles, iter_map, label)
+        except ValueError as exc:
+            print(f"  WARNING: {exc} Falling back to stage coordinates.")
+            _assign_from_coordinates(region_tiles)
+
+    print(f"  Grid indices assigned for {len(tiles)} tile(s) "
+          f"across {len(regions)} region(s)")
 
 
 # ---------------------------------------------------------------------------
